@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:csv/csv.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
 
 void main() {
   runApp(MyApp());
@@ -13,12 +19,16 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'ODUKATHEE ADAVVU',
       theme: ThemeData(
-        primarySwatch: Colors.lightBlue,
-        scaffoldBackgroundColor: Colors.grey[100],
-        appBarTheme: AppBarTheme(backgroundColor: Colors.indigo, elevation: 0),
+        primarySwatch: Colors.green,
+        scaffoldBackgroundColor: Colors.white,
+        appBarTheme: AppBarTheme(
+          backgroundColor: Colors.green[700],
+          elevation: 0,
+          foregroundColor: Colors.white,
+        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color.fromARGB(255, 73, 80, 115),
+            backgroundColor: Colors.green[600],
             foregroundColor: Colors.white,
             padding: EdgeInsets.symmetric(vertical: 12, horizontal: 24),
             shape: RoundedRectangleBorder(
@@ -30,6 +40,17 @@ class MyApp extends StatelessWidget {
           elevation: 2,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
+          ),
+          color: Colors.white,
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.green[300]!),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.green[700]!, width: 2),
           ),
         ),
       ),
@@ -139,7 +160,13 @@ class EMIHomePage extends StatefulWidget {
 
 class _EMIHomePageState extends State<EMIHomePage> {
   List<EMICategory> _categories = [];
+  List<EMICategory> _filteredCategories = [];
   bool _isLoading = true;
+  String _searchQuery = '';
+  DateTime? _startDateFilter;
+  DateTime? _endDateFilter;
+  double? _minAmountFilter;
+  double? _maxAmountFilter;
 
   @override
   void initState() {
@@ -162,6 +189,7 @@ class _EMIHomePageState extends State<EMIHomePage> {
             decodedData
                 .map((category) => EMICategory.fromJson(category))
                 .toList();
+        _filteredCategories = List.from(_categories);
       }
     } catch (e) {
       print('Error loading data: $e');
@@ -184,13 +212,108 @@ class _EMIHomePageState extends State<EMIHomePage> {
     }
   }
 
-  double get totalAmount =>
-      _categories.fold(0.0, (sum, category) => sum + category.totalAmount);
+  Future<void> _backupData() async {
+    try {
+      final directory = await getTemporaryDirectory();
+      final path =
+          '${directory.path}/emi_backup_${DateTime.now().toIso8601String()}.json';
+      final file = File(path);
+      await file.writeAsString(
+        jsonEncode(_categories.map((category) => category.toJson()).toList()),
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Backup saved to $path')));
+    } catch (e) {
+      print('Error backing up data: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to create backup')));
+    }
+  }
 
-  double get weeklyTotal =>
-      _categories.fold(0.0, (sum, category) => sum + category.getWeeklyTotal());
+  Future<void> _restoreData() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
 
-  double get monthlyTotal => _categories.fold(
+      if (result != null) {
+        File file = File(result.files.single.path!);
+        String contents = await file.readAsString();
+        List<dynamic> decodedData = jsonDecode(contents);
+        setState(() {
+          _categories =
+              decodedData
+                  .map((category) => EMICategory.fromJson(category))
+                  .toList();
+          _filteredCategories = List.from(_categories);
+          _saveData();
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Data restored successfully')));
+      }
+    } catch (e) {
+      print('Error restoring data: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to restore data')));
+    }
+  }
+
+  Future<void> _exportReport() async {
+    try {
+      if (await Permission.storage.request().isGranted) {
+        List<List<dynamic>> csvData = [
+          ['Category', 'Date', 'Amount'],
+        ];
+
+        for (var category in _categories) {
+          for (var entry in category.entries) {
+            csvData.add([
+              category.name,
+              DateFormat('yyyy-MM-dd').format(entry.date),
+              entry.amount,
+            ]);
+          }
+        }
+
+        String csv = const ListToCsvConverter().convert(csvData);
+        final directory = await getExternalStorageDirectory();
+        final path =
+            '${directory!.path}/emi_report_${DateTime.now().toIso8601String()}.csv';
+        final file = File(path);
+        await file.writeAsString(csv);
+
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Report exported to $path')));
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Storage permission denied')));
+      }
+    } catch (e) {
+      print('Error exporting report: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to export report')));
+    }
+  }
+
+  double get totalAmount => _filteredCategories.fold(
+    0.0,
+    (sum, category) => sum + category.totalAmount,
+  );
+
+  double get weeklyTotal => _filteredCategories.fold(
+    0.0,
+    (sum, category) => sum + category.getWeeklyTotal(),
+  );
+
+  double get monthlyTotal => _filteredCategories.fold(
     0.0,
     (sum, category) => sum + category.getMonthlyTotal(),
   );
@@ -236,6 +359,7 @@ class _EMIHomePageState extends State<EMIHomePage> {
             name: result,
           ),
         );
+        _filteredCategories = List.from(_categories);
         _saveData();
       });
     }
@@ -248,7 +372,7 @@ class _EMIHomePageState extends State<EMIHomePage> {
           (context) => AlertDialog(
             title: Text('Delete Category'),
             content: Text(
-              'Are you sure you want to delete "${_categories[index].name}" and all its entries?',
+              'Are you sure you want to delete "${_filteredCategories[index].name}" and all its entries?',
             ),
             actions: [
               TextButton(
@@ -266,18 +390,183 @@ class _EMIHomePageState extends State<EMIHomePage> {
 
     if (confirm == true) {
       setState(() {
-        _categories.removeAt(index);
+        _categories.removeWhere(
+          (cat) => cat.id == _filteredCategories[index].id,
+        );
+        _filteredCategories.removeAt(index);
         _saveData();
       });
     }
+  }
+
+  void _filterCategories() {
+    setState(() {
+      _filteredCategories =
+          _categories.where((category) {
+            bool matchesSearch = category.name.toLowerCase().contains(
+              _searchQuery.toLowerCase(),
+            );
+            bool matchesDate = true;
+            bool matchesAmount = true;
+
+            if (_startDateFilter != null || _endDateFilter != null) {
+              matchesDate = category.entries.any((entry) {
+                if (_startDateFilter != null &&
+                    entry.date.isBefore(_startDateFilter!)) {
+                  return false;
+                }
+                if (_endDateFilter != null &&
+                    entry.date.isAfter(_endDateFilter!)) {
+                  return false;
+                }
+                return true;
+              });
+            }
+
+            if (_minAmountFilter != null || _maxAmountFilter != null) {
+              matchesAmount = category.entries.any((entry) {
+                if (_minAmountFilter != null &&
+                    entry.amount < _minAmountFilter!) {
+                  return false;
+                }
+                if (_maxAmountFilter != null &&
+                    entry.amount > _maxAmountFilter!) {
+                  return false;
+                }
+                return true;
+              });
+            }
+
+            return matchesSearch && matchesDate && matchesAmount;
+          }).toList();
+    });
+  }
+
+  void _showFilterDialog() async {
+    final minAmountController = TextEditingController();
+    final maxAmountController = TextEditingController();
+    DateTime? tempStartDate = _startDateFilter;
+    DateTime? tempEndDate = _endDateFilter;
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Filter Categories'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: minAmountController,
+                  decoration: InputDecoration(
+                    labelText: 'Min Amount',
+                    prefixText: '₹',
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: maxAmountController,
+                  decoration: InputDecoration(
+                    labelText: 'Max Amount',
+                    prefixText: '₹',
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+                SizedBox(height: 8),
+                ListTile(
+                  title: Text(
+                    tempStartDate == null
+                        ? 'Select Start Date'
+                        : 'Start: ${DateFormat('yyyy-MM-dd').format(tempStartDate!)}',
+                  ),
+                  trailing: Icon(Icons.calendar_today),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: tempStartDate ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2030),
+                    );
+                    if (picked != null) {
+                      tempStartDate = picked;
+                    }
+                  },
+                ),
+                ListTile(
+                  title: Text(
+                    tempEndDate == null
+                        ? 'Select End Date'
+                        : 'End: ${DateFormat('yyyy-MM-dd').format(tempEndDate!)}',
+                  ),
+                  trailing: Icon(Icons.calendar_today),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: tempEndDate ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2030),
+                    );
+                    if (picked != null) {
+                      tempEndDate = picked;
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _minAmountFilter =
+                      double.tryParse(minAmountController.text) ?? null;
+                  _maxAmountFilter =
+                      double.tryParse(maxAmountController.text) ?? null;
+                  _startDateFilter = tempStartDate;
+                  _endDateFilter = tempEndDate;
+                  _filterCategories();
+                });
+                Navigator.pop(context);
+              },
+              child: Text('Apply'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Odukathe adavvu'),
-        actions: [IconButton(icon: Icon(Icons.refresh), onPressed: _loadData)],
+        title: Text('Odukathe Adavvu'),
+        actions: [
+          IconButton(icon: Icon(Icons.refresh), onPressed: _loadData),
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'export') {
+                _exportReport();
+              } else if (value == 'backup') {
+                _backupData();
+              } else if (value == 'restore') {
+                _restoreData();
+              }
+            },
+            itemBuilder:
+                (context) => [
+                  PopupMenuItem(value: 'export', child: Text('Export Report')),
+                  PopupMenuItem(value: 'backup', child: Text('Backup Data')),
+                  PopupMenuItem(value: 'restore', child: Text('Restore Data')),
+                ],
+          ),
+        ],
       ),
       body:
           _isLoading
@@ -287,9 +576,33 @@ class _EMIHomePageState extends State<EMIHomePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Search and Filter
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            decoration: InputDecoration(
+                              hintText: 'Search categories...',
+                              prefixIcon: Icon(Icons.search),
+                              border: OutlineInputBorder(),
+                            ),
+                            onChanged: (value) {
+                              _searchQuery = value;
+                              _filterCategories();
+                            },
+                          ),
+                        ),
+                        SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(Icons.filter_list),
+                          onPressed: _showFilterDialog,
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 16),
                     // Summary Card
                     Card(
-                      color: Colors.indigo[50],
+                      color: Colors.green[50],
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -300,7 +613,7 @@ class _EMIHomePageState extends State<EMIHomePage> {
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.indigo[800],
+                                color: Colors.green[800],
                               ),
                             ),
                             SizedBox(height: 8),
@@ -312,18 +625,74 @@ class _EMIHomePageState extends State<EMIHomePage> {
                       ),
                     ),
                     SizedBox(height: 16),
+                    // Statistics Chart
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Category Distribution',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green[800],
+                              ),
+                            ),
+                            SizedBox(height: 16),
+                            Container(
+                              height: 200,
+                              child: PieChart(
+                                PieChartData(
+                                  sections:
+                                      _categories.map((category) {
+                                        final total = totalAmount;
+                                        final percentage =
+                                            total > 0
+                                                ? (category.totalAmount /
+                                                        total) *
+                                                    100
+                                                : 0.0;
+                                        return PieChartSectionData(
+                                          color:
+                                              Colors.green[(category.hashCode %
+                                                          5 +
+                                                      1) *
+                                                  100]!,
+                                          value: category.totalAmount,
+                                          title:
+                                              '${percentage.toStringAsFixed(1)}%',
+                                          radius: 50,
+                                          titleStyle: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                          ),
+                                        );
+                                      }).toList(),
+                                  sectionsSpace: 2,
+                                  centerSpaceRadius: 40,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 16),
                     Text(
                       'Categories',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.indigo[800],
+                        color: Colors.green[800],
                       ),
                     ),
                     SizedBox(height: 8),
                     Expanded(
                       child:
-                          _categories.isEmpty
+                          _filteredCategories.isEmpty
                               ? Center(
                                 child: Text(
                                   'No EMI categories yet.\nTap the + button to add one.',
@@ -335,14 +704,14 @@ class _EMIHomePageState extends State<EMIHomePage> {
                                 ),
                               )
                               : ListView.builder(
-                                itemCount: _categories.length,
+                                itemCount: _filteredCategories.length,
                                 itemBuilder: (context, index) {
-                                  final category = _categories[index];
+                                  final category = _filteredCategories[index];
                                   return Card(
                                     margin: EdgeInsets.only(bottom: 8),
                                     child: ListTile(
                                       leading: CircleAvatar(
-                                        backgroundColor: Colors.indigo,
+                                        backgroundColor: Colors.green[600],
                                         child: Text(
                                           category.name[0].toUpperCase(),
                                           style: TextStyle(color: Colors.white),
@@ -379,8 +748,22 @@ class _EMIHomePageState extends State<EMIHomePage> {
                                                   category: category,
                                                   onUpdate: (updatedCategory) {
                                                     setState(() {
-                                                      _categories[index] =
-                                                          updatedCategory;
+                                                      final idx = _categories
+                                                          .indexWhere(
+                                                            (cat) =>
+                                                                cat.id ==
+                                                                updatedCategory
+                                                                    .id,
+                                                          );
+                                                      if (idx != -1) {
+                                                        _categories[idx] =
+                                                            updatedCategory;
+                                                      }
+                                                      _filteredCategories =
+                                                          List.from(
+                                                            _categories,
+                                                          );
+                                                      _filterCategories();
                                                       _saveData();
                                                     });
                                                   },
@@ -399,7 +782,7 @@ class _EMIHomePageState extends State<EMIHomePage> {
       floatingActionButton: FloatingActionButton(
         onPressed: _addCategory,
         child: Icon(Icons.add),
-        backgroundColor: Colors.indigo,
+        backgroundColor: Colors.green[700],
       ),
     );
   }
@@ -410,16 +793,13 @@ class _EMIHomePageState extends State<EMIHomePage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(fontSize: 16, color: Colors.indigo[700]),
-          ),
+          Text(label, style: TextStyle(fontSize: 16, color: Colors.green[700])),
           Text(
             '₹${amount.toStringAsFixed(2)}',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Colors.indigo[800],
+              color: Colors.green[800],
             ),
           ),
         ],
@@ -440,19 +820,22 @@ class EMIDetailPage extends StatefulWidget {
 
 class _EMIDetailPageState extends State<EMIDetailPage> {
   final _amountController = TextEditingController();
+  final _searchController = TextEditingController();
   late EMICategory _category;
   final _dateController = TextEditingController();
   DateTime _selectedDate = DateTime.now();
+  String _searchQuery = '';
+  List<EMIEntry> _filteredEntries = [];
 
   @override
   void initState() {
     super.initState();
-    // Create a deep copy of the category
     _category = EMICategory(
       id: widget.category.id,
       name: widget.category.name,
       entries: List.from(widget.category.entries),
     );
+    _filteredEntries = List.from(_category.entries);
     _dateController.text = DateFormat('yyyy-MM-dd').format(_selectedDate);
   }
 
@@ -483,6 +866,8 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
           date: _selectedDate,
         ),
       );
+      _filteredEntries = List.from(_category.entries);
+      _filterEntries();
       widget.onUpdate(_category);
       _amountController.clear();
     });
@@ -512,6 +897,8 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
     if (confirm == true) {
       setState(() {
         _category.entries.removeWhere((entry) => entry.id == id);
+        _filteredEntries = List.from(_category.entries);
+        _filterEntries();
         widget.onUpdate(_category);
       });
     }
@@ -527,7 +914,7 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
         return Theme(
           data: ThemeData.light().copyWith(
             colorScheme: ColorScheme.light(
-              primary: Colors.indigo,
+              primary: Colors.green[700]!,
               onPrimary: Colors.white,
               surface: Colors.white,
               onSurface: Colors.black,
@@ -546,6 +933,18 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
     }
   }
 
+  void _filterEntries() {
+    setState(() {
+      _filteredEntries =
+          _category.entries.where((entry) {
+            return entry.amount.toString().contains(_searchQuery) ||
+                DateFormat(
+                  'yyyy-MM-dd',
+                ).format(entry.date).contains(_searchQuery);
+          }).toList();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -555,9 +954,23 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Search
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search entries...',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) {
+                _searchQuery = value;
+                _filterEntries();
+              },
+            ),
+            SizedBox(height: 16),
             // Summary Card
             Card(
-              color: Colors.indigo[50],
+              color: Colors.green[50],
               child: Padding(
                 padding: EdgeInsets.all(16.0),
                 child: Column(
@@ -568,7 +981,7 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.indigo[800],
+                        color: Colors.green[800],
                       ),
                     ),
                     SizedBox(height: 8),
@@ -583,7 +996,6 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
               ),
             ),
             SizedBox(height: 16),
-
             // Add new entry section
             Card(
               child: Padding(
@@ -644,20 +1056,18 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
               ),
             ),
             SizedBox(height: 16),
-
-            // Entries List
             Text(
               'Recent Transactions',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.indigo[800],
+                color: Colors.green[800],
               ),
             ),
             SizedBox(height: 8),
             Expanded(
               child:
-                  _category.entries.isEmpty
+                  _filteredEntries.isEmpty
                       ? Center(
                         child: Text(
                           'No entries yet.\nAdd your first entry above.',
@@ -669,10 +1079,9 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
                         ),
                       )
                       : ListView.builder(
-                        itemCount: _category.entries.length,
+                        itemCount: _filteredEntries.length,
                         itemBuilder: (context, index) {
-                          // Sort entries by date, most recent first
-                          final sortedEntries = List.from(_category.entries)
+                          final sortedEntries = List.from(_filteredEntries)
                             ..sort((a, b) => b.date.compareTo(a.date));
                           final entry = sortedEntries[index];
 
@@ -680,10 +1089,10 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
                             margin: EdgeInsets.only(bottom: 8),
                             child: ListTile(
                               leading: CircleAvatar(
-                                backgroundColor: Colors.indigo[200],
+                                backgroundColor: Colors.green[200],
                                 child: Icon(
                                   Icons.payment,
-                                  color: Colors.indigo[800],
+                                  color: Colors.green[800],
                                 ),
                               ),
                               title: Text(
@@ -714,16 +1123,13 @@ class _EMIDetailPageState extends State<EMIDetailPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(fontSize: 16, color: Colors.indigo[700]),
-          ),
+          Text(label, style: TextStyle(fontSize: 16, color: Colors.green[700])),
           Text(
             '₹${amount.toStringAsFixed(2)}',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Colors.indigo[800],
+              color: Colors.green[800],
             ),
           ),
         ],
