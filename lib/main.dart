@@ -266,75 +266,80 @@ class _EMIHomePageState extends State<EMIHomePage> {
 
   Future<void> _exportReport() async {
     try {
-      // Request storage permissions
-      var status = await Permission.storage.status;
-      if (!status.isGranted) {
-        status = await Permission.storage.request();
-      }
-
-      // For Android 13 and above, also request media permissions
-      if (await Permission.manageExternalStorage.isGranted ||
-          await Permission.storage.isGranted) {
-        List<List<dynamic>> csvData = [
-          ['Category', 'Date', 'Amount'],
-        ];
-
-        for (var category in _categories) {
-          for (var entry in category.entries) {
-            csvData.add([
-              category.name,
-              DateFormat('yyyy-MM-dd').format(entry.date),
-              entry.amount,
-            ]);
+      // Check Android version
+      if (Platform.isAndroid) {
+        // For Android 11 and above
+        if (await Permission.manageExternalStorage.isGranted) {
+          await _performExport();
+        } else {
+          // Request manage external storage permission
+          var status = await Permission.manageExternalStorage.request();
+          if (status.isGranted) {
+            await _performExport();
+          } else {
+            // Show dialog to guide user to settings
+            showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: Text('Storage Permission Required'),
+                  content: Text(
+                    'To export data, please follow these steps:\n\n'
+                    '1. Tap "Open Settings"\n'
+                    '2. Tap "Permissions"\n'
+                    '3. Tap "Files and media"\n'
+                    '4. Select "Allow all the time"',
+                  ),
+                  actions: [
+                    TextButton(
+                      child: Text('Cancel'),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                    TextButton(
+                      child: Text('Open Settings'),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        openAppSettings();
+                      },
+                    ),
+                  ],
+                );
+              },
+            );
           }
         }
-
-        String csv = const ListToCsvConverter().convert(csvData);
-
-        // Get the downloads directory
-        final directory = await getExternalStorageDirectory();
-        if (directory == null) {
-          throw Exception('Could not access storage directory');
-        }
-
-        final path =
-            '${directory.path}/emi_report_${DateTime.now().toIso8601String()}.csv';
-        final file = File(path);
-        await file.writeAsString(csv);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Report exported to $path'),
-            action: SnackBarAction(label: 'OK', onPressed: () {}),
-          ),
-        );
       } else {
-        // Show a dialog explaining why we need the permission
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: Text('Storage Permission Required'),
-              content: Text(
-                'This app needs storage permission to export your EMI data. '
-                'Please grant the permission in your device settings.',
-              ),
-              actions: [
-                TextButton(
-                  child: Text('Cancel'),
-                  onPressed: () => Navigator.of(context).pop(),
+        // For other platforms or older Android versions
+        var status = await Permission.storage.request();
+        if (status.isGranted) {
+          await _performExport();
+        } else {
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: Text('Storage Permission Required'),
+                content: Text(
+                  'This app needs storage permission to export your EMI data. '
+                  'Please grant the permission in your device settings.',
                 ),
-                TextButton(
-                  child: Text('Open Settings'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    openAppSettings();
-                  },
-                ),
-              ],
-            );
-          },
-        );
+                actions: [
+                  TextButton(
+                    child: Text('Cancel'),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  TextButton(
+                    child: Text('Open Settings'),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      openAppSettings();
+                    },
+                  ),
+                ],
+              );
+            },
+          );
+        }
       }
     } catch (e) {
       print('Error exporting report: $e');
@@ -345,6 +350,42 @@ class _EMIHomePageState extends State<EMIHomePage> {
         ),
       );
     }
+  }
+
+  Future<void> _performExport() async {
+    List<List<dynamic>> csvData = [
+      ['Category', 'Date', 'Amount'],
+    ];
+
+    for (var category in _categories) {
+      for (var entry in category.entries) {
+        csvData.add([
+          category.name,
+          DateFormat('yyyy-MM-dd').format(entry.date),
+          entry.amount,
+        ]);
+      }
+    }
+
+    String csv = const ListToCsvConverter().convert(csvData);
+
+    // Get the downloads directory
+    final directory = await getExternalStorageDirectory();
+    if (directory == null) {
+      throw Exception('Could not access storage directory');
+    }
+
+    final path =
+        '${directory.path}/emi_report_${DateTime.now().toIso8601String()}.csv';
+    final file = File(path);
+    await file.writeAsString(csv);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Report exported to $path'),
+        action: SnackBarAction(label: 'OK', onPressed: () {}),
+      ),
+    );
   }
 
   double get totalAmount => _filteredCategories.fold(
