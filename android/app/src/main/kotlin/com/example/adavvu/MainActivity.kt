@@ -1,4 +1,4 @@
-package com.example.adavvu
+package com.example.exspnc
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine

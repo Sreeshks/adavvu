@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:app_settings/app_settings.dart';
 
 void main() {
   runApp(MyApp());
@@ -265,7 +266,15 @@ class _EMIHomePageState extends State<EMIHomePage> {
 
   Future<void> _exportReport() async {
     try {
-      if (await Permission.storage.request().isGranted) {
+      // Request storage permissions
+      var status = await Permission.storage.status;
+      if (!status.isGranted) {
+        status = await Permission.storage.request();
+      }
+
+      // For Android 13 and above, also request media permissions
+      if (await Permission.manageExternalStorage.isGranted ||
+          await Permission.storage.isGranted) {
         List<List<dynamic>> csvData = [
           ['Category', 'Date', 'Amount'],
         ];
@@ -281,25 +290,60 @@ class _EMIHomePageState extends State<EMIHomePage> {
         }
 
         String csv = const ListToCsvConverter().convert(csvData);
+
+        // Get the downloads directory
         final directory = await getExternalStorageDirectory();
+        if (directory == null) {
+          throw Exception('Could not access storage directory');
+        }
+
         final path =
-            '${directory!.path}/emi_report_${DateTime.now().toIso8601String()}.csv';
+            '${directory.path}/emi_report_${DateTime.now().toIso8601String()}.csv';
         final file = File(path);
         await file.writeAsString(csv);
 
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Report exported to $path')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Report exported to $path'),
+            action: SnackBarAction(label: 'OK', onPressed: () {}),
+          ),
+        );
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Storage permission denied')));
+        // Show a dialog explaining why we need the permission
+        showDialog(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: Text('Storage Permission Required'),
+              content: Text(
+                'This app needs storage permission to export your EMI data. '
+                'Please grant the permission in your device settings.',
+              ),
+              actions: [
+                TextButton(
+                  child: Text('Cancel'),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                TextButton(
+                  child: Text('Open Settings'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    openAppSettings();
+                  },
+                ),
+              ],
+            );
+          },
+        );
       }
     } catch (e) {
       print('Error exporting report: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to export report')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export report: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -571,212 +615,213 @@ class _EMIHomePageState extends State<EMIHomePage> {
       body:
           _isLoading
               ? Center(child: CircularProgressIndicator())
-              : Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Search and Filter
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            decoration: InputDecoration(
-                              hintText: 'Search categories...',
-                              prefixIcon: Icon(Icons.search),
-                              border: OutlineInputBorder(),
+              : SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Search and Filter
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              decoration: InputDecoration(
+                                hintText: 'Search categories...',
+                                prefixIcon: Icon(Icons.search),
+                                border: OutlineInputBorder(),
+                              ),
+                              onChanged: (value) {
+                                _searchQuery = value;
+                                _filterCategories();
+                              },
                             ),
-                            onChanged: (value) {
-                              _searchQuery = value;
-                              _filterCategories();
-                            },
+                          ),
+                          SizedBox(width: 8),
+                          IconButton(
+                            icon: Icon(Icons.filter_list),
+                            onPressed: _showFilterDialog,
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      // Summary Card
+                      Card(
+                        color: Colors.green[50],
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Summary',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green[800],
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              _buildSummaryRow(
+                                'Total EMI Amount:',
+                                totalAmount,
+                              ),
+                              _buildSummaryRow('This Week:', weeklyTotal),
+                              _buildSummaryRow('This Month:', monthlyTotal),
+                            ],
                           ),
                         ),
-                        SizedBox(width: 8),
-                        IconButton(
-                          icon: Icon(Icons.filter_list),
-                          onPressed: _showFilterDialog,
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 16),
-                    // Summary Card
-                    Card(
-                      color: Colors.green[50],
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Summary',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green[800],
-                              ),
-                            ),
-                            SizedBox(height: 8),
-                            _buildSummaryRow('Total EMI Amount:', totalAmount),
-                            _buildSummaryRow('This Week:', weeklyTotal),
-                            _buildSummaryRow('This Month:', monthlyTotal),
-                          ],
-                        ),
                       ),
-                    ),
-                    SizedBox(height: 16),
-                    // Statistics Chart
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Category Distribution',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green[800],
-                              ),
-                            ),
-                            SizedBox(height: 16),
-                            Container(
-                              height: 200,
-                              child: PieChart(
-                                PieChartData(
-                                  sections:
-                                      _categories.map((category) {
-                                        final total = totalAmount;
-                                        final percentage =
-                                            total > 0
-                                                ? (category.totalAmount /
-                                                        total) *
-                                                    100
-                                                : 0.0;
-                                        return PieChartSectionData(
-                                          color:
-                                              Colors.green[(category.hashCode %
-                                                          5 +
-                                                      1) *
-                                                  100]!,
-                                          value: category.totalAmount,
-                                          title:
-                                              '${percentage.toStringAsFixed(1)}%',
-                                          radius: 50,
-                                          titleStyle: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.white,
-                                          ),
-                                        );
-                                      }).toList(),
-                                  sectionsSpace: 2,
-                                  centerSpaceRadius: 40,
+                      SizedBox(height: 16),
+                      // Statistics Chart
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Category Distribution',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green[800],
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    Text(
-                      'Categories',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green[800],
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Expanded(
-                      child:
-                          _filteredCategories.isEmpty
-                              ? Center(
-                                child: Text(
-                                  'No EMI categories yet.\nTap the + button to add one.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: 16,
+                              SizedBox(height: 16),
+                              Container(
+                                height: 200,
+                                child: PieChart(
+                                  PieChartData(
+                                    sections:
+                                        _categories.map((category) {
+                                          final total = totalAmount;
+                                          final percentage =
+                                              total > 0
+                                                  ? (category.totalAmount /
+                                                          total) *
+                                                      100
+                                                  : 0.0;
+                                          return PieChartSectionData(
+                                            color:
+                                                Colors.green[(category
+                                                                .hashCode %
+                                                            5 +
+                                                        1) *
+                                                    100]!,
+                                            value: category.totalAmount,
+                                            title:
+                                                '${percentage.toStringAsFixed(1)}%',
+                                            radius: 50,
+                                            titleStyle: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          );
+                                        }).toList(),
+                                    sectionsSpace: 2,
+                                    centerSpaceRadius: 40,
                                   ),
                                 ),
-                              )
-                              : ListView.builder(
-                                itemCount: _filteredCategories.length,
-                                itemBuilder: (context, index) {
-                                  final category = _filteredCategories[index];
-                                  return Card(
-                                    margin: EdgeInsets.only(bottom: 8),
-                                    child: ListTile(
-                                      leading: CircleAvatar(
-                                        backgroundColor: Colors.green[600],
-                                        child: Text(
-                                          category.name[0].toUpperCase(),
-                                          style: TextStyle(color: Colors.white),
-                                        ),
-                                      ),
-                                      title: Text(
-                                        category.name,
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      subtitle: Text(
-                                        'Total: ₹${category.totalAmount.toStringAsFixed(2)}',
-                                      ),
-                                      trailing: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          IconButton(
-                                            icon: Icon(
-                                              Icons.delete,
-                                              color: Colors.red,
-                                            ),
-                                            onPressed:
-                                                () => _deleteCategory(index),
-                                          ),
-                                        ],
-                                      ),
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder:
-                                                (context) => EMIDetailPage(
-                                                  category: category,
-                                                  onUpdate: (updatedCategory) {
-                                                    setState(() {
-                                                      final idx = _categories
-                                                          .indexWhere(
-                                                            (cat) =>
-                                                                cat.id ==
-                                                                updatedCategory
-                                                                    .id,
-                                                          );
-                                                      if (idx != -1) {
-                                                        _categories[idx] =
-                                                            updatedCategory;
-                                                      }
-                                                      _filteredCategories =
-                                                          List.from(
-                                                            _categories,
-                                                          );
-                                                      _filterCategories();
-                                                      _saveData();
-                                                    });
-                                                  },
-                                                ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  );
-                                },
                               ),
-                    ),
-                  ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 16),
+                      Text(
+                        'Categories',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green[800],
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      _filteredCategories.isEmpty
+                          ? Center(
+                            child: Text(
+                              'No EMI categories yet.\nTap the + button to add one.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 16,
+                              ),
+                            ),
+                          )
+                          : ListView.builder(
+                            shrinkWrap: true,
+                            physics: NeverScrollableScrollPhysics(),
+                            itemCount: _filteredCategories.length,
+                            itemBuilder: (context, index) {
+                              final category = _filteredCategories[index];
+                              return Card(
+                                margin: EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: Colors.green[600],
+                                    child: Text(
+                                      category.name[0].toUpperCase(),
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                  ),
+                                  title: Text(
+                                    category.name,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    'Total: ₹${category.totalAmount.toStringAsFixed(2)}',
+                                  ),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: Icon(
+                                          Icons.delete,
+                                          color: Colors.red,
+                                        ),
+                                        onPressed: () => _deleteCategory(index),
+                                      ),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder:
+                                            (context) => EMIDetailPage(
+                                              category: category,
+                                              onUpdate: (updatedCategory) {
+                                                setState(() {
+                                                  final idx = _categories
+                                                      .indexWhere(
+                                                        (cat) =>
+                                                            cat.id ==
+                                                            updatedCategory.id,
+                                                      );
+                                                  if (idx != -1) {
+                                                    _categories[idx] =
+                                                        updatedCategory;
+                                                  }
+                                                  _filteredCategories =
+                                                      List.from(_categories);
+                                                  _filterCategories();
+                                                  _saveData();
+                                                });
+                                              },
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                    ],
+                  ),
                 ),
               ),
       floatingActionButton: FloatingActionButton(
